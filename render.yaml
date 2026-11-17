@@ -1,0 +1,30 @@
+# Blueprint Render untuk demo (paket gratis).
+# Cara pakai: lihat docs/DEPLOY_RENDER.md
+#
+# Catatan paket gratis:
+# - Aplikasi tertidur setelah ~15 menit tanpa pengunjung; pembukaan pertama ~30-60 detik.
+# - Disk tidak permanen: database SQLite kembali ke data awal setiap restart/deploy ulang.
+# - Alamat di QR meja otomatis memakai URL publik Render (RENDER_EXTERNAL_URL).
+services:
+  - type: web
+    name: dapoer-bu-mimin
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/info
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: APP_TZ
+        value: Asia/Jakarta
+      - key: DB_FILE
+        value: data/warung.db
+      - key: ADMIN_EMAIL
+        value: dapoerbumimin@gmail.com
+      # Diminta saat membuat Blueprint (tidak disimpan di repo). Jangan pakai kata sandi contoh.
+      - key: ADMIN_KATA_SANDI
+        sync: false

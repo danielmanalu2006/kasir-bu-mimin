@@ -23,7 +23,8 @@ function samaAman(a, b) {
 /** Alamat dasar yang bisa dibuka HP pembeli, untuk isi QR. */
 function alamatDasar(req) {
   if (baseUrl) return baseUrl;
-  const host = req.get('host') || 'localhost';
+  // req.host (Express 5) ikut membaca X-Forwarded-Host dari proxy/tunnel (trust proxy).
+  const host = req.host || req.get('host') || 'localhost';
   const [nama, port] = host.split(':');
   const lokal = ['localhost', '127.0.0.1', '[::1]'].includes(nama);
   const ip = lokal ? ipLan() : null;
@@ -38,6 +39,9 @@ function buatApp(db) {
   const transaksi = layananTransaksi(db, barang, stok, { meja, jadwal });
 
   const app = express();
+  // Di hosting (Render, tunnel) aplikasi berada di belakang proxy HTTPS:
+  // percayai satu lapis proxy supaya req.protocol = https (dipakai untuk isi QR).
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '100kb' }));
 
   // Pengguna aktif dikirim lewat header X-Pengguna-Id (dipilih di layar awal).

@@ -43,6 +43,10 @@ Saat pertama dijalankan, database (`data/warung.db`) dibuat otomatis dan diisi d
 
 > Kalau dari HP tidak bisa dibuka: izinkan Node.js di Windows Firewall (jaringan Private), atau pastikan Wi-Fi kampus tidak memblokir antar-perangkat (pakai hotspot HP sebagai alternatif).
 
+### Demo online (gratis)
+
+Bisa di-deploy ke **Render** memakai `render.yaml` yang sudah disiapkan. Langkahnya ada di [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md). Di paket gratis, aplikasi tertidur bila tidak dibuka dan data kembali ke data awal setiap restart.
+
 ## Perintah lain
 
 | Perintah | Fungsi |
