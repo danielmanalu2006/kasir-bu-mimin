@@ -22,6 +22,11 @@
 --   TRANSAKSI.status: belum_selesai → selesai / dibatalkan (pembatalan
 --   mengembalikan stok lewat STOK_MASUK). Transaksi lama dianggap selesai.
 --   TRANSAKSI.uang_diterima: uang tunai dari pelanggan (opsional), untuk kembalian.
+-- Tambahan untuk sisi pembeli (pesan dari meja lewat QR, Nov 2026):
+--   tabel MEJA (kode acak untuk QR), TRANSAKSI.id_meja (sumber pesanan),
+--   TRANSAKSI.status_bayar (belum_bayar / lunas) dan TRANSAKSI.kode_bayar
+--   (link simulasi pembayaran QRIS). Pesanan dari kasir langsung lunas.
+--   Indeks untuk kolom baru dibuat di src/db.js (supaya database lama ikut).
 --   Database lama otomatis ditambah kolomnya oleh src/db.js.
 --
 -- Catatan tipe: SQLite tidak punya tipe date/time/decimal/boolean asli.
@@ -59,6 +64,13 @@ CREATE TABLE IF NOT EXISTS STOK_MASUK (
   catatan       TEXT
 );
 
+CREATE TABLE IF NOT EXISTS MEJA (
+  id_meja       INTEGER PRIMARY KEY AUTOINCREMENT,
+  nama_meja     TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+  kode          TEXT    NOT NULL UNIQUE,            -- kode acak di QR meja
+  aktif         INTEGER NOT NULL DEFAULT 1 CHECK (aktif IN (0, 1))
+);
+
 CREATE TABLE IF NOT EXISTS TRANSAKSI (
   id_transaksi    INTEGER PRIMARY KEY AUTOINCREMENT,
   id_pengguna     INTEGER NOT NULL REFERENCES PENGGUNA(id_pengguna),
@@ -69,7 +81,10 @@ CREATE TABLE IF NOT EXISTS TRANSAKSI (
   catatan         TEXT,   -- opsional, mis. "tidak pedas"
   status          TEXT    NOT NULL DEFAULT 'belum_selesai'
                   CHECK (status IN ('belum_selesai', 'selesai', 'dibatalkan')),
-  uang_diterima   INTEGER CHECK (uang_diterima IS NULL OR uang_diterima >= 0)
+  uang_diterima   INTEGER CHECK (uang_diterima IS NULL OR uang_diterima >= 0),
+  id_meja         INTEGER REFERENCES MEJA(id_meja),   -- NULL = dari kasir
+  status_bayar    TEXT    NOT NULL DEFAULT 'lunas' CHECK (status_bayar IN ('belum_bayar', 'lunas')),
+  kode_bayar      TEXT                                -- link simulasi bayar (unik, lihat db.js)
 );
 
 CREATE TABLE IF NOT EXISTS DETAIL_TRANSAKSI (

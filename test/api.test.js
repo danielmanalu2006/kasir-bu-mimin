@@ -51,9 +51,9 @@ function siapkan() {
 describe('Setup: database sesuai ERD revisi', () => {
   const c = siapkan();
 
-  test('7 tabel ERD terbentuk', () => {
+  test('8 tabel terbentuk (7 tabel ERD + MEJA untuk pesanan pembeli)', () => {
     const t = c.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name).sort();
-    assert.deepEqual(t, ['BARANG', 'DETAIL_TRANSAKSI', 'JADWAL_BUKA_TUTUP', 'PENGGUNA', 'STOK_KELUAR', 'STOK_MASUK', 'TRANSAKSI']);
+    assert.deepEqual(t, ['BARANG', 'DETAIL_TRANSAKSI', 'JADWAL_BUKA_TUTUP', 'MEJA', 'PENGGUNA', 'STOK_KELUAR', 'STOK_MASUK', 'TRANSAKSI']);
   });
 
   test('kolom tiap tabel persis seperti data dictionary', () => {
@@ -63,7 +63,8 @@ describe('Setup: database sesuai ERD revisi', () => {
     assert.deepEqual(kolom('STOK_MASUK'), ['id_masuk', 'id_barang', 'id_pengguna', 'jumlah', 'tanggal_masuk', 'catatan']);
     assert.deepEqual(kolom('STOK_KELUAR'), ['id_keluar', 'id_barang', 'id_pengguna', 'id_transaksi', 'jumlah', 'alasan', 'waktu_keluar', 'catatan']);
     assert.deepEqual(kolom('JADWAL_BUKA_TUTUP'), ['id_jadwal', 'id_pengguna', 'tanggal', 'jam_buka', 'jam_tutup', 'buka', 'catatan']);
-    assert.deepEqual(kolom('TRANSAKSI'), ['id_transaksi', 'id_pengguna', 'waktu_transaksi', 'metode_bayar', 'total', 'nama_pelanggan', 'catatan', 'status', 'uang_diterima']);
+    assert.deepEqual(kolom('TRANSAKSI'), ['id_transaksi', 'id_pengguna', 'waktu_transaksi', 'metode_bayar', 'total', 'nama_pelanggan', 'catatan', 'status', 'uang_diterima', 'id_meja', 'status_bayar', 'kode_bayar']);
+    assert.deepEqual(kolom('MEJA'), ['id_meja', 'nama_meja', 'kode', 'aktif']);
     assert.deepEqual(kolom('DETAIL_TRANSAKSI'), ['id_detail', 'id_transaksi', 'id_barang', 'jumlah', 'harga_satuan', 'subtotal']);
   });
 
@@ -510,7 +511,8 @@ describe('Kasir: nama pelanggan, catatan, nomor pesanan harian', () => {
     lama.close();
     const db = bukaDatabase(file);
     const kolom = db.prepare('PRAGMA table_info(TRANSAKSI)').all().map((r) => r.name);
-    assert.ok(['nama_pelanggan', 'catatan', 'status', 'uang_diterima'].every((k) => kolom.includes(k)));
+    assert.ok(['nama_pelanggan', 'catatan', 'status', 'uang_diterima', 'id_meja', 'status_bayar', 'kode_bayar'].every((k) => kolom.includes(k)));
+    assert.equal(db.prepare('SELECT status_bayar FROM TRANSAKSI').get().status_bayar, 'lunas', 'transaksi lama dianggap lunas');
     assert.equal(db.prepare('SELECT total FROM TRANSAKSI').get().total, 5000, 'data lama tetap ada');
     assert.equal(db.prepare('SELECT status FROM TRANSAKSI').get().status, 'selesai', 'transaksi lama dianggap selesai');
     db.close();
@@ -597,5 +599,205 @@ describe('Transaksi: status pesanan, uang diterima, pembatalan, rekap, menu terl
     assert.ok(bel.body.id_transaksi);
     assert.deepEqual((await c.call('GET', '/transaksi/terlaris?tanggal=2020-01-01')).body.menu, []);
     assert.equal((await c.call('GET', '/transaksi/terlaris?tanggal=salah')).status, 400);
+  });
+});
+
+describe('Pembeli: QR meja, pesan dari meja, simulasi bayar QRIS, kelola meja', () => {
+  const c = siapkan();
+  const kodeMeja = (n = 'Meja 1') => c.db.prepare('SELECT kode FROM MEJA WHERE nama_meja = ?').get(n).kode;
+  const bukaSeharian = () => c.call('PUT', `/jadwal/${hariIni()}`, { buka: true, jam_buka: '00:00', jam_tutup: '23:59' });
+  const pesan = (kode, body) => c.call('POST', `/publik/meja/${kode}/pesanan`, body, null);
+
+  test('data awal: 5 meja aktif dengan kode acak yang unik', () => {
+    const meja = c.db.prepare('SELECT * FROM MEJA').all();
+    assert.equal(meja.length, 5);
+    assert.equal(new Set(meja.map((m) => m.kode)).size, 5);
+    assert.ok(meja.every((m) => /^[A-Za-z0-9]{10}$/.test(m.kode) && m.aktif === 1));
+  });
+
+  test('scan QR: kode benar → nama meja; kode salah → 404 (tanpa login)', async () => {
+    const r = await c.call('GET', `/publik/meja/${kodeMeja()}`, undefined, null);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.nama_meja, 'Meja 1');
+    assert.equal((await c.call('GET', '/publik/meja/salahKode12', undefined, null)).status, 404);
+    assert.equal((await c.call('GET', '/publik/meja/../x', undefined, null)).status, 404);
+  });
+
+  test('warung tutup / belum diatur → pesanan ditolak, stok tidak berubah', async () => {
+    const b = c.barang('Nasi Goreng');
+    await c.call('PUT', `/jadwal/${hariIni()}`, { buka: false });
+    const r = await pesan(kodeMeja(), { nama_pelanggan: 'Ani', items: [{ id_barang: b.id_barang, jumlah: 1 }] });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.field, 'warung');
+    assert.equal(c.barang('Nasi Goreng').stok_saat_ini, b.stok_saat_ini);
+  });
+
+  test('pesan dari meja: QRIS belum dibayar, stok berkurang, tercatat dengan meja; nama wajib', async () => {
+    await bukaSeharian();
+    const b = c.barang('Nasi Goreng');
+    const tanpaNama = await pesan(kodeMeja(), { items: [{ id_barang: b.id_barang, jumlah: 1 }] });
+    assert.equal(tanpaNama.status, 400);
+    assert.equal(tanpaNama.body.field, 'nama_pelanggan');
+    const r = await pesan(kodeMeja('Meja 2'), { nama_pelanggan: 'Ani', catatan: 'pedas', items: [{ id_barang: b.id_barang, jumlah: 2 }] });
+    assert.equal(r.status, 201);
+    assert.equal(r.body.status, 'belum_selesai');
+    assert.equal(r.body.status_bayar, 'belum_bayar');
+    assert.equal(r.body.nama_meja, 'Meja 2');
+    assert.match(r.body.kode_bayar, /^[A-Za-z0-9]{16}$/);
+    assert.match(r.body.kode_pesanan, /^WU-\d{6}-\d{3}$/);
+    assert.equal(r.body.pencatat, undefined, 'data admin tidak dikirim ke pembeli');
+    assert.equal(c.barang('Nasi Goreng').stok_saat_ini, b.stok_saat_ini - 2);
+    const row = c.db.prepare('SELECT * FROM TRANSAKSI WHERE kode_bayar = ?').get(r.body.kode_bayar);
+    assert.equal(row.metode_bayar, 'qris');
+    assert.ok(row.id_meja);
+  });
+
+  test('pembeli melihat status pesanan lewat kode bayar; kode salah 404', async () => {
+    const r = await pesan(kodeMeja(), { nama_pelanggan: 'Budi', items: [{ id_barang: c.barang('Kopi Hitam').id_barang, jumlah: 1 }] });
+    const s = await c.call('GET', `/publik/pesanan/${r.body.kode_bayar}`, undefined, null);
+    assert.equal(s.status, 200);
+    assert.equal(s.body.kode_pesanan, r.body.kode_pesanan);
+    assert.equal((await c.call('GET', '/publik/pesanan/tidakAdaKode1234', undefined, null)).status, 404);
+  });
+
+  test('belum dibayar: tidak dihitung pemasukan & tidak bisa diselesaikan; setelah bayar bisa', async () => {
+    const r = await pesan(kodeMeja(), { nama_pelanggan: 'Cici', items: [{ id_barang: c.barang('Es Jeruk').id_barang, jumlah: 1 }] });
+    const id = c.db.prepare('SELECT id_transaksi FROM TRANSAKSI WHERE kode_bayar = ?').get(r.body.kode_bayar).id_transaksi;
+    const sebelum = (await c.call('GET', '/transaksi')).body.ringkasan;
+    assert.ok(sebelum.belum_bayar >= 1);
+    const gagal = await c.call('PATCH', `/transaksi/${id}/status`, { status: 'selesai' });
+    assert.equal(gagal.status, 409);
+    const bayar = await c.call('POST', `/publik/bayar/${r.body.kode_bayar}`, {}, null);
+    assert.equal(bayar.status, 200);
+    assert.equal(bayar.body.status_bayar, 'lunas');
+    const ulang = await c.call('POST', `/publik/bayar/${r.body.kode_bayar}`, {}, null);
+    assert.equal(ulang.status, 200, 'membayar ulang aman');
+    const sesudah = (await c.call('GET', '/transaksi')).body.ringkasan;
+    assert.equal(sesudah.total, sebelum.total + r.body.total);
+    assert.equal(sesudah.belum_bayar, sebelum.belum_bayar - 1);
+    assert.equal((await c.call('PATCH', `/transaksi/${id}/status`, { status: 'selesai' })).status, 200);
+  });
+
+  test('pesanan meja dibatalkan admin: stok kembali, tidak bisa dibayar lagi', async () => {
+    const b = c.barang('Kerupuk');
+    const r = await pesan(kodeMeja(), { nama_pelanggan: 'Dodi', items: [{ id_barang: b.id_barang, jumlah: 3 }] });
+    const id = c.db.prepare('SELECT id_transaksi FROM TRANSAKSI WHERE kode_bayar = ?').get(r.body.kode_bayar).id_transaksi;
+    assert.equal((await c.call('PATCH', `/transaksi/${id}/status`, { status: 'dibatalkan' })).status, 200);
+    assert.equal(c.barang('Kerupuk').stok_saat_ini, b.stok_saat_ini);
+    assert.equal((await c.call('POST', `/publik/bayar/${r.body.kode_bayar}`, {}, null)).status, 409);
+  });
+
+  test('transaksi dari kasir tetap langsung lunas tanpa meja', async () => {
+    const r = await c.call('POST', '/transaksi', { metode_bayar: 'tunai', items: [{ id_barang: c.barang('Gorengan').id_barang, jumlah: 1 }] });
+    assert.equal(r.body.status_bayar, 'lunas');
+    assert.equal(r.body.id_meja, null);
+    assert.equal(r.body.kode_bayar, null);
+  });
+
+  test('kelola meja (admin): tambah, nama unik, kode baru membatalkan QR lama, nonaktif', async () => {
+    assert.equal((await c.call('GET', '/meja', undefined, null)).status, 401);
+    assert.equal((await c.call('GET', '/meja', undefined, 2)).status, 403, 'pegawai tidak boleh');
+    const daftar = await c.call('GET', '/meja');
+    assert.equal(daftar.status, 200);
+    assert.ok(daftar.body.meja[0].link.endsWith(`/m/${daftar.body.meja[0].kode}`));
+    const baru = await c.call('POST', '/meja', { nama_meja: 'Meja Teras' });
+    assert.equal(baru.status, 201);
+    assert.equal((await c.call('POST', '/meja', { nama_meja: 'meja teras' })).status, 409);
+    const lama = baru.body.kode;
+    const ganti = await c.call('POST', `/meja/${baru.body.id_meja}/kode-baru`);
+    assert.notEqual(ganti.body.kode, lama);
+    assert.equal((await c.call('GET', `/publik/meja/${lama}`, undefined, null)).status, 404);
+    await c.call('PATCH', `/meja/${baru.body.id_meja}`, { aktif: false });
+    assert.equal((await c.call('GET', `/publik/meja/${ganti.body.kode}`, undefined, null)).status, 404);
+  });
+
+  test('gambar QR meja & bayar berupa SVG; kode salah 404', async () => {
+    const base = c.base.replace(/\/api$/, '');
+    const q = await fetch(`${base}/qr/meja/${kodeMeja()}.svg`);
+    assert.equal(q.status, 200);
+    assert.match(q.headers.get('content-type'), /image\/svg\+xml/);
+    assert.match(await q.text(), /<svg/);
+    assert.equal((await fetch(`${base}/qr/meja/salahKode99.svg`)).status, 404);
+    const r = await pesan(kodeMeja(), { nama_pelanggan: 'Eka', items: [{ id_barang: c.barang('Gorengan').id_barang, jumlah: 1 }] });
+    assert.equal((await fetch(`${base}/qr/bayar/${r.body.kode_bayar}.svg`)).status, 200);
+  });
+});
+
+describe('Jadwal mingguan bawaan (tanggal yang belum diatur)', () => {
+  const c = siapkan();
+  // 2030-01-05 Sabtu, 2030-01-06 Minggu, 2030-01-07 Senin — jauh setelah data awal
+  test('tanggal belum diatur memakai pola bawaan & ditandai bawaan', async () => {
+    const senin = (await c.call('GET', '/jadwal/2030-01-07')).body.jadwal;
+    assert.deepEqual([senin.bawaan, senin.buka, senin.jam_buka, senin.jam_tutup], [true, true, '07:00', '16:00']);
+    const sabtu = (await c.call('GET', '/jadwal/2030-01-05')).body.jadwal;
+    assert.deepEqual([sabtu.buka, sabtu.jam_buka, sabtu.jam_tutup], [true, '08:00', '13:00']);
+    const minggu = (await c.call('GET', '/jadwal/2030-01-06')).body.jadwal;
+    assert.equal(minggu.buka, false);
+    const rentang = (await c.call('GET', '/jadwal?dari=2030-01-05&hari=3')).body;
+    assert.ok(rentang.every((r) => r.jadwal && r.jadwal.bawaan === true));
+  });
+
+  test('jadwal yang diatur admin mengalahkan bawaan', async () => {
+    await c.call('PUT', '/jadwal/2030-01-06', { buka: true, jam_buka: '09:00', jam_tutup: '12:00' });
+    const j = (await c.call('GET', '/jadwal/2030-01-06')).body.jadwal;
+    assert.deepEqual([j.bawaan, j.buka, j.jam_buka], [false, true, '09:00']);
+  });
+
+  test('cek buka-sekarang untuk pesanan pembeli memakai jadwal bawaan', () => {
+    const jadwal = require('../src/services/jadwal')(c.db);
+    assert.equal(jadwal.bukaSekarang('2030-01-07 10:00:00').buka, true);
+    assert.equal(jadwal.bukaSekarang('2030-01-07 06:59:00').buka, false);
+    assert.equal(jadwal.bukaSekarang('2030-01-07 16:00:00').buka, false);
+    assert.equal(jadwal.bukaSekarang('2030-01-13 10:00:00').buka, false, 'Minggu tutup');
+  });
+});
+
+describe('Antrean pesanan masuk (Kasir)', () => {
+  const c = siapkan();
+  test('berisi pesanan belum selesai dari kasir & meja, terlama di atas; selesai/batal keluar dari antrean', async () => {
+    await c.call('PUT', `/jadwal/${hariIni()}`, { buka: true, jam_buka: '00:00', jam_tutup: '23:59' });
+    const kodeMeja = c.db.prepare("SELECT kode FROM MEJA WHERE nama_meja = 'Meja 2'").get().kode;
+    const g = c.barang('Gorengan').id_barang;
+    const a = await c.call('POST', '/transaksi', { metode_bayar: 'tunai', items: [{ id_barang: g, jumlah: 1 }] });
+    const m = await c.call('POST', `/publik/meja/${kodeMeja}/pesanan`, { nama_pelanggan: 'Ani', items: [{ id_barang: g, jumlah: 1 }] }, null);
+    const b = await c.call('POST', '/transaksi', { metode_bayar: 'qris', items: [{ id_barang: g, jumlah: 1 }] });
+    let q = (await c.call('GET', '/transaksi/antrean')).body;
+    assert.deepEqual(q.map((t) => t.id_transaksi), [a.body.id_transaksi, q[1].id_transaksi, b.body.id_transaksi]);
+    assert.equal(q[1].nama_meja, 'Meja 2');
+    assert.equal(q[1].status_bayar, 'belum_bayar');
+    assert.ok(m.body.kode_bayar);
+    await c.call('PATCH', `/transaksi/${a.body.id_transaksi}/status`, { status: 'selesai' });
+    await c.call('PATCH', `/transaksi/${b.body.id_transaksi}/status`, { status: 'dibatalkan' });
+    q = (await c.call('GET', '/transaksi/antrean')).body;
+    assert.equal(q.length, 1);
+    assert.equal(q[0].nama_meja, 'Meja 2');
+  });
+  test('antrean hanya untuk pengguna yang masuk', async () => {
+    assert.equal((await c.call('GET', '/transaksi/antrean', undefined, null)).status, 401);
+  });
+});
+
+describe('Menu terlaris: harian, mingguan, bulanan (rentang tanggal)', () => {
+  const c = siapkan();
+  test('rentang menjumlahkan beberapa hari; satu hari hanya hari itu; hanya pesanan selesai', async () => {
+    const g = c.barang('Gorengan').id_barang;
+    const buat = async (jumlah, tanggal, selesai = true) => {
+      const r = await c.call('POST', '/transaksi', { metode_bayar: 'tunai', items: [{ id_barang: g, jumlah }] });
+      if (selesai) await c.call('PATCH', `/transaksi/${r.body.id_transaksi}/status`, { status: 'selesai' });
+      c.db.prepare('UPDATE TRANSAKSI SET waktu_transaksi = ? WHERE id_transaksi = ?').run(`${tanggal} 10:00:00`, r.body.id_transaksi);
+    };
+    await buat(2, '2026-11-16'); // Senin
+    await buat(3, '2026-11-18'); // Rabu
+    await buat(9, '2026-11-19', false); // belum selesai, tidak dihitung
+    await buat(5, '2026-11-24'); // minggu berikutnya
+    const jml = async (q) => ((await c.call('GET', `/transaksi/terlaris?${q}`)).body.menu.find((m) => m.id_barang === g) || { jumlah: 0 }).jumlah;
+    assert.equal(await jml('tanggal=2026-11-16'), 2);
+    assert.equal(await jml('dari=2026-11-16&sampai=2026-11-22'), 5, 'satu minggu');
+    assert.equal(await jml('dari=2026-11-01&sampai=2026-11-30'), 10, 'satu bulan');
+  });
+  test('rentang tidak valid ditolak', async () => {
+    assert.equal((await c.call('GET', '/transaksi/terlaris?dari=2026-11-20&sampai=2026-11-10')).status, 400);
+    assert.equal((await c.call('GET', '/transaksi/terlaris?dari=2024-01-01&sampai=2026-01-01')).status, 400);
+    assert.equal((await c.call('GET', '/transaksi/terlaris?dari=salah&sampai=2026-01-01')).status, 400);
   });
 });

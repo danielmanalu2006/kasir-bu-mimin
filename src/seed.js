@@ -6,6 +6,11 @@
 // Setelah mengubah BARANG_AWAL, jalankan `npm run db:reset`.
 
 const { hariIni, tambahHari, sekarang } = require('./lib/waktu');
+const { kodeAcak } = require('./lib/kode');
+const { jadwalBawaan } = require('./lib/jadwal-bawaan');
+
+// Meja awal; QR tiap meja bisa dicetak dari Lainnya › Kelola meja & QR.
+const JUMLAH_MEJA_AWAL = 5;
 
 const PENGGUNA_AWAL = [
   { nama: 'Bu Mimin', peran: 'admin' },
@@ -29,12 +34,10 @@ const BARANG_AWAL = [
   ['Sayur dan semacamnya', 'porsi', 3000, 10, 5],
 ];
 
-// Jadwal awal: Senin-Jumat 07.00-16.00, Sabtu 08.00-13.00, Minggu libur.
+// Jadwal awal 7 hari = jadwal mingguan bawaan (Senin-Jumat 07.00-16.00, Sabtu 08.00-13.00, Minggu libur).
 function jadwalUntuk(tanggal) {
-  const hari = new Date(`${tanggal}T00:00:00Z`).getUTCDay(); // 0 = Minggu
-  if (hari === 0) return { buka: 0, jam_buka: null, jam_tutup: null, catatan: 'Libur hari Minggu' };
-  if (hari === 6) return { buka: 1, jam_buka: '08:00', jam_tutup: '13:00', catatan: null };
-  return { buka: 1, jam_buka: '07:00', jam_tutup: '16:00', catatan: null };
+  const j = jadwalBawaan(tanggal);
+  return { ...j, buka: j.buka ? 1 : 0 };
 }
 
 /** Isi data awal. `barang` bisa diganti (dipakai uji otomatis dengan data ujinya sendiri). */
@@ -57,6 +60,8 @@ function isiDataAwal(db, { barang = BARANG_AWAL } = {}) {
       if (stok > 0) insMasuk.run(lastInsertRowid, admin, stok, sekarang(), 'Stok awal');
     }
 
+    isiMejaAwal(db);
+
     const insJadwal = db.prepare(
       'INSERT INTO JADWAL_BUKA_TUTUP (id_pengguna, tanggal, jam_buka, jam_tutup, buka, catatan) VALUES (?, ?, ?, ?, ?, ?)'
     );
@@ -69,4 +74,10 @@ function isiDataAwal(db, { barang = BARANG_AWAL } = {}) {
   run();
 }
 
-module.exports = { isiDataAwal, BARANG_AWAL, PENGGUNA_AWAL };
+/** Buat meja awal (Meja 1..5) dengan kode QR acak. Dipakai juga untuk database lama yang belum punya meja. */
+function isiMejaAwal(db) {
+  const insMeja = db.prepare('INSERT INTO MEJA (nama_meja, kode, aktif) VALUES (?, ?, 1)');
+  for (let i = 1; i <= JUMLAH_MEJA_AWAL; i++) insMeja.run(`Meja ${i}`, kodeAcak(10));
+}
+
+module.exports = { isiDataAwal, isiMejaAwal, BARANG_AWAL, PENGGUNA_AWAL };

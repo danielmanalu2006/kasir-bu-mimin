@@ -1,14 +1,17 @@
 // Aplikasi Express: API + halaman web (folder public).
 const path = require('path');
 const crypto = require('crypto');
+const QRCode = require('qrcode');
 const express = require('express');
-const { akunAdmin, kontakPengembang } = require('./config');
+const { akunAdmin, kontakPengembang, baseUrl } = require('./config');
 const { ValidasiError } = require('./lib/validasi');
 const { hariIni } = require('./lib/waktu');
 const layananBarang = require('./services/barang');
 const layananStok = require('./services/stok');
 const layananJadwal = require('./services/jadwal');
 const layananTransaksi = require('./services/transaksi');
+const layananMeja = require('./services/meja');
+const { ipLan } = require('./lib/jaringan');
 
 /** Bandingkan teks tanpa bocor waktu (cegah tebak kata sandi lewat lama respons). */
 function samaAman(a, b) {
@@ -17,11 +20,22 @@ function samaAman(a, b) {
   return crypto.timingSafeEqual(ha, hb);
 }
 
+/** Alamat dasar yang bisa dibuka HP pembeli, untuk isi QR. */
+function alamatDasar(req) {
+  if (baseUrl) return baseUrl;
+  const host = req.get('host') || 'localhost';
+  const [nama, port] = host.split(':');
+  const lokal = ['localhost', '127.0.0.1', '[::1]'].includes(nama);
+  const ip = lokal ? ipLan() : null;
+  return `${req.protocol}://${ip || nama}${port ? ':' + port : ''}`;
+}
+
 function buatApp(db) {
   const barang = layananBarang(db);
   const stok = layananStok(db, barang);
   const jadwal = layananJadwal(db);
-  const transaksi = layananTransaksi(db, barang, stok);
+  const meja = layananMeja(db);
+  const transaksi = layananTransaksi(db, barang, stok, { meja, jadwal });
 
   const app = express();
   app.use(express.json({ limit: '100kb' }));
@@ -36,12 +50,11 @@ function buatApp(db) {
     req.pengguna = p;
     next();
   }
-  function wajibAdmin(req, _res, next) {
-    if (req.pengguna.peran !== 'admin') {
-      return next(new ValidasiError('Hanya admin yang boleh mengubah jadwal buka tutup.', 'pengguna', 403));
-    }
+  const wajibAdminUntuk = (aksi) => (req, _res, next) => {
+    if (req.pengguna.peran !== 'admin') return next(new ValidasiError(`Hanya admin yang boleh ${aksi}.`, 'pengguna', 403));
     next();
-  }
+  };
+  const wajibAdmin = wajibAdminUntuk('mengubah jadwal buka tutup');
 
   const api = express.Router();
 
@@ -85,7 +98,13 @@ function buatApp(db) {
   // ---------- TRANSAKSI (EP-02 US-05) ----------
   api.post('/transaksi', wajibPengguna, (req, res) => res.status(201).json(transaksi.simpan(req.body || {}, req.pengguna.id_pengguna)));
   api.get('/transaksi', (req, res) => res.json(transaksi.logHarian(req.query.tanggal || hariIni())));
-  api.get('/transaksi/terlaris', (req, res) => res.json(transaksi.terlaris(req.query.tanggal || hariIni())));
+  api.get('/transaksi/antrean', wajibPengguna, (_req, res) => res.json(transaksi.antrean()));
+  // ?tanggal=YYYY-MM-DD (satu hari) atau ?dari=...&sampai=... (mingguan / bulanan)
+  api.get('/transaksi/terlaris', (req, res) => {
+    const { tanggal, dari, sampai } = req.query;
+    const awal = dari || tanggal || hariIni();
+    res.json(transaksi.terlaris({ dari: awal, sampai: sampai || awal }));
+  });
   api.patch('/transaksi/:id/status', wajibPengguna, (req, res) => res.json(transaksi.ubahStatus(req.params.id, req.body || {}, req.pengguna.id_pengguna)));
   api.get('/transaksi/:id', (req, res) => {
     const t = transaksi.ambil(req.params.id);
@@ -93,7 +112,50 @@ function buatApp(db) {
     res.json(t);
   });
 
+  // ---------- MEJA & QR (admin) ----------
+  const adminMeja = [wajibPengguna, wajibAdminUntuk('mengelola meja')];
+  api.get('/meja', ...adminMeja, (req, res) => {
+    const dasar = alamatDasar(req);
+    res.json({ alamat_dasar: dasar, meja: meja.daftar().map((m) => ({ ...m, link: `${dasar}/m/${m.kode}` })) });
+  });
+  api.post('/meja', ...adminMeja, (req, res) => res.status(201).json(meja.tambah(req.body || {})));
+  api.patch('/meja/:id', ...adminMeja, (req, res) => res.json(meja.ubah(req.params.id, req.body || {})));
+  api.post('/meja/:id/kode-baru', ...adminMeja, (req, res) => res.json(meja.kodeBaru(req.params.id)));
+
+  // ---------- PEMBELI (tanpa login) ----------
+  // Tamu & pembeli memakai GET /barang dan /jadwal (publik) untuk menu, stok, dan jadwal.
+  const pub = express.Router();
+  pub.get('/status', (_req, res) => res.json(jadwal.bukaSekarang()));
+  pub.get('/meja/:kode', (req, res) => {
+    const m = meja.dariKode(req.params.kode);
+    res.json({ nama_meja: m.nama_meja });
+  });
+  pub.post('/meja/:kode/pesanan', (req, res) => res.status(201).json(transaksi.pesanDariMeja(req.params.kode, req.body || {})));
+  pub.get('/pesanan/:kode', (req, res) => res.json(transaksi.pesananPembeli(req.params.kode)));
+  pub.post('/bayar/:kode', (req, res) => res.json(transaksi.bayar(req.params.kode)));
+  api.use('/publik', pub);
+
   app.use('/api', api);
+
+  // ---------- Gambar QR (SVG) ----------
+  async function kirimQr(res, isi) {
+    const svg = await QRCode.toString(isi, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#13233a', light: '#ffffff' } });
+    res.type('image/svg+xml').set('Cache-Control', 'no-store').send(svg);
+  }
+  app.get('/qr/meja/:kode.svg', async (req, res) => {
+    const m = meja.dariKode(req.params.kode);
+    await kirimQr(res, `${alamatDasar(req)}/m/${m.kode}`);
+  });
+  app.get('/qr/bayar/:kode.svg', async (req, res) => {
+    const t = transaksi.dariKodeBayar(req.params.kode);
+    await kirimQr(res, `${alamatDasar(req)}/bayar/${t.kode_bayar}`);
+  });
+
+  // ---------- Halaman ----------
+  // Pembeli: / (tamu), /m/<kode> (pembeli di meja), /bayar/<kode> (simulasi QRIS).
+  // Admin: /admin (halaman admin.html).
+  const halamanPembeli = path.join(__dirname, '..', 'public', 'index.html');
+  app.get(['/m/:kode', '/bayar/:kode'], (_req, res) => res.sendFile(halamanPembeli));
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Alamat API tidak ditemukan.' }));
 
   // Halaman web

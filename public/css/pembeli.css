@@ -1,0 +1,79 @@
+/* Halaman pembeli (tamu & pembeli di meja). Memakai token & komponen dari app.css. */
+body.halaman-pembeli { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+body.halaman-pembeli .cartbar { bottom: 0; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+body.halaman-pembeli main { padding-bottom: 88px; }
+
+.identitas {
+  flex: none; padding: 5px 12px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  font-size: 0.78rem; font-weight: 700; color: var(--muted);
+}
+.identitas.meja { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+
+.pb-hero { padding: 16px; }
+.pb-hero h1 { margin: 0 0 6px; font-size: 1.45rem; font-weight: 800; letter-spacing: -0.025em; }
+.pb-hero p { margin: 0; font-size: 0.88rem; color: var(--muted); line-height: 1.5; }
+.pb-info {
+  display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; padding: 10px 12px;
+  border-radius: 8px; background: var(--primary-soft); font-size: 0.82rem; line-height: 1.5; color: var(--ink);
+}
+.pb-info svg { width: 17px; height: 17px; flex: none; margin-top: 1px; }
+
+.pb-status { padding: 14px; }
+.pb-status b { display: block; font-size: 1rem; margin-top: 2px; }
+.pb-status .small { display: block; margin-top: 2px; }
+.pb-jadwal { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.pb-jadwal summary { cursor: pointer; font-size: 0.85rem; font-weight: 700; color: var(--primary); }
+.pb-jadwal ul { list-style: none; margin: 10px 0 0; padding: 0; }
+.pb-jadwal li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 8px; border-radius: 6px; font-size: 0.85rem; }
+.pb-jadwal li.hari-ini { background: color-mix(in srgb, var(--ok-soft) 55%, var(--surface)); font-weight: 700; }
+.pb-jadwal li b { font-size: 0.85rem; }
+.pb-menipis { color: var(--warn); font-weight: 700; }
+
+.pb-pesanan-list { display: grid; gap: 8px; }
+.pb-pesanan {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; text-decoration: none; color: inherit;
+}
+.pb-pesanan > span:first-child b { display: block; font-size: 0.92rem; }
+.pb-pesanan-status { font-size: 0.78rem; color: var(--muted); }
+.trx-status.disiapkan { background: var(--ok-soft); color: var(--ok); }
+
+.pb-metode {
+  display: flex; align-items: center; gap: 12px; padding: 12px; margin-bottom: 12px;
+  border: 1px solid var(--primary-line); border-radius: 8px; background: var(--surface);
+}
+.pb-metode b { display: block; font-size: 0.92rem; }
+.pb-qris {
+  flex: none; display: grid; place-items: center; width: 52px; height: 32px; border-radius: 6px;
+  background: var(--primary); color: var(--primary-ink); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.06em;
+}
+
+.pb-bayar { text-align: center; }
+.pb-bayar .trx-sub { margin-bottom: 14px; }
+.pb-qr {
+  display: block; width: 220px; height: 220px; margin: 0 auto 14px; padding: 10px;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px;
+}
+.pb-bayar .pb-info { text-align: left; }
+.pb-link-demo { display: inline-block; margin-top: 12px; font-size: 0.85rem; font-weight: 700; color: var(--primary); }
+
+.pb-hasil {
+  display: flex; gap: 12px; align-items: flex-start; padding: 14px; margin: 0 0 12px; border-radius: 10px;
+}
+.pb-hasil svg { width: 22px; height: 22px; flex: none; }
+.pb-hasil b { display: block; font-size: 0.98rem; margin-bottom: 2px; }
+.pb-hasil span { font-size: 0.85rem; line-height: 1.5; }
+.pb-hasil.ok { background: var(--ok-soft); color: var(--ok); }
+.pb-hasil.batal { background: var(--danger-soft); color: var(--danger); }
+
+.pb-bayar-sim { padding: 18px 16px; max-width: 420px; margin: 8px auto 0; }
+.pb-bayar-head { display: flex; align-items: center; gap: 12px; padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+.pb-bayar-head b { display: block; }
+.pb-bayar-sim .trx-baris b { text-align: right; }
+.pb-bayar-sim .btn, .pb-bayar-sim .pb-hasil { margin-top: 16px; }
+.pb-catatan-sim { margin: 14px 0 0; font-size: 0.76rem; color: var(--muted); text-align: center; line-height: 1.5; }
+
+/* Pemesanan ditutup (di luar jam buka / jadwal belum diatur) */
+.pb-info.tutup { background: var(--warn-soft); color: var(--warn); }
+.pb-tutup-menu { font-weight: 600; font-size: 0.85rem; margin: 0 0 12px; }

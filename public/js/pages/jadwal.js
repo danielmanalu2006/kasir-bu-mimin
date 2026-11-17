@@ -131,6 +131,7 @@ export async function render(app, q) {
         <span class="label-kecil">HARI INI</span>
         <b>${esc(tanggalLengkap(hariIni))}</b>
         ${today?.catatan ? `<span class="small muted">${esc(today.catatan)}</span>` : ''}
+        ${today?.bawaan ? '<span class="small muted">Memakai jadwal bawaan</span>' : ''}
       </div>
       ${pilStatus(today)}`;
     app.querySelector('#list').innerHTML = data.map(({ tanggal, jadwal: j }) => `
@@ -138,7 +139,7 @@ export async function render(app, q) {
         <div class="jadwal-baris-atas">
           <div>
             <span class="jadwal-tgl">${esc(tanggalSedang(tanggal))}</span>
-            ${tanggal === hariIni ? '<span class="chip-hariini">Hari ini</span>' : ''}
+            <span class="jadwal-chips">${tanggal === hariIni ? '<span class="chip-hariini">Hari ini</span>' : ''}${j?.bawaan ? '<span class="chip-bawaan" title="Belum diatur manual; memakai jadwal mingguan bawaan">Bawaan</span>' : ''}</span>
           </div>
           ${pilStatus(j)}
         </div>

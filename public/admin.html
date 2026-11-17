@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1b3556">
+  <title>Admin · Dapoer Bu Mimin</title>
+  <link rel="icon" href="/img/Logo.png">
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/auth.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/beranda" aria-label="Beranda Dapoer Bu Mimin">
+      <span class="logo-mark" aria-hidden="true"></span>
+      <span><b>Dapoer Bu Mimin</b><small>Operasional Warung</small></span>
+    </a>
+    <div class="spacer"></div>
+    <button id="btn-user" class="avatar" aria-label="Akun &amp; menu lainnya">?</button>
+  </header>
+
+  <main id="app" aria-live="polite"></main>
+
+  <!-- Ikon diisi dari js/util.js (ikonMenu) supaya sama dengan ikon di Beranda -->
+  <nav class="bottomnav" aria-label="Menu utama">
+    <a href="#/kasir" data-nav="kasir"><span data-ikon="kasir"></span>Kasir</a>
+    <a href="#/stok" data-nav="stok"><span data-ikon="stok"></span>Stok</a>
+    <a href="#/jadwal" data-nav="jadwal"><span data-ikon="jadwal"></span>Jadwal</a>
+    <a href="#/transaksi" data-nav="transaksi"><span data-ikon="transaksi"></span>Transaksi</a>
+  </nav>
+
+  <div class="toast-wrap" id="toasts"></div>
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

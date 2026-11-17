@@ -227,7 +227,7 @@ async function riwayat(app) {
 
   function keterangan(r) {
     if (r.jenis === 'masuk') return r.catatan || '-';
-    if (r.alasan === 'terjual') return r.id_transaksi ? 'Terjual lewat Kasir' : 'Terjual';
+    if (r.alasan === 'terjual') return r.nama_meja ? `Terjual (pesanan ${r.nama_meja})` : r.id_transaksi ? 'Terjual lewat Kasir' : 'Terjual';
     return kapital(r.alasan) + (r.catatan ? ` · ${r.catatan}` : '');
   }
   function waktu(w) {

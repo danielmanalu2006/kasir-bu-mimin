@@ -14,6 +14,9 @@ module.exports = {
       ? ':memory:'
       : path.resolve(root, process.env.DB_FILE || 'data/warung.db'),
   timeZone: process.env.APP_TZ || 'Asia/Jakarta',
+  // Alamat yang dipakai di dalam QR (mis. http://192.168.1.5:3000). Kosong =
+  // otomatis dari alamat yang dibuka admin (localhost diganti IP Wi-Fi laptop).
+  baseUrl: (process.env.BASE_URL || '').trim().replace(/\/+$/, ''),
   // Akun masuk admin. Disimpan di .env, bukan di tabel, karena ERD revisi
   // belum punya kolom email/kata sandi. Nilai cadangan = contoh di .env.example.
   akunAdmin: {

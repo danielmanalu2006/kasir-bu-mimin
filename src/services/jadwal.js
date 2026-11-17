@@ -1,10 +1,14 @@
 // EP-01 US-03: jadwal buka tutup warung, disimpan PER TANGGAL.
+// Tanggal yang belum diatur memakai jadwal mingguan bawaan (src/lib/jadwal-bawaan.js),
+// ditandai `bawaan: true`. Jadwal yang diatur admin selalu diutamakan.
 const v = require('../lib/validasi');
-const { hariIni, tambahHari, tanggalValid, jamValid } = require('../lib/waktu');
+const { hariIni, sekarang, tambahHari, tanggalValid, jamValid } = require('../lib/waktu');
+const { jadwalBawaan } = require('../lib/jadwal-bawaan');
 
-function rapikan(j) {
-  if (!j) return null;
-  return { ...j, buka: !!j.buka };
+/** Baris database → jadwal; tanggal tanpa baris → jadwal bawaan. */
+function rapikan(row, tanggal) {
+  if (row) return { ...row, buka: !!row.buka, bawaan: false };
+  return { tanggal, ...jadwalBawaan(tanggal), diatur_oleh: null, bawaan: true };
 }
 
 module.exports = function layananJadwal(db) {
@@ -18,12 +22,13 @@ module.exports = function layananJadwal(db) {
     return tanggal;
   }
 
-  /** Jadwal satu tanggal (null bila belum diatur). */
+  /** Jadwal satu tanggal (jadwal bawaan bila belum diatur). */
   function ambil(tanggal) {
-    return rapikan(qSatu.get(cekTanggal(tanggal)));
+    cekTanggal(tanggal);
+    return rapikan(qSatu.get(tanggal), tanggal);
   }
 
-  /** Jadwal beberapa hari mulai `dari`. Tanggal yang belum diatur tetap muncul (jadwal: null). */
+  /** Jadwal beberapa hari mulai `dari`. Tanggal yang belum diatur memakai jadwal bawaan. */
   function rentang(dari = hariIni(), jumlahHari = 8) {
     cekTanggal(dari);
     const n = Math.min(Math.max(Number(jumlahHari) || 8, 1), 31);
@@ -34,10 +39,10 @@ module.exports = function layananJadwal(db) {
          JOIN PENGGUNA p USING (id_pengguna) WHERE tanggal BETWEEN ? AND ? ORDER BY tanggal`
       )
       .all(dari, sampai);
-    const peta = new Map(rows.map((r) => [r.tanggal, rapikan(r)]));
+    const peta = new Map(rows.map((r) => [r.tanggal, r]));
     return Array.from({ length: n }, (_, i) => {
       const t = tambahHari(dari, i);
-      return { tanggal: t, jadwal: peta.get(t) || null };
+      return { tanggal: t, jadwal: rapikan(peta.get(t), t) };
     });
   }
 
@@ -84,5 +89,16 @@ module.exports = function layananJadwal(db) {
     return { jadwal: ambil(tanggal), diubah: sudahAda };
   }
 
-  return { ambil, rentang, simpan, validasi };
+  /** Apakah warung buka SAAT INI menurut jadwal hari ini (atau jadwal bawaan). Dipakai untuk pesanan pembeli. */
+  function bukaSekarang(waktu = sekarang()) {
+    const tanggal = waktu.slice(0, 10);
+    const jam = waktu.slice(11, 16);
+    const j = rapikan(qSatu.get(tanggal), tanggal);
+    if (!j.buka) return { buka: false, pesan: 'Warung tutup hari ini.', jadwal: j };
+    if (jam < j.jam_buka) return { buka: false, pesan: `Warung belum buka. Buka pukul ${j.jam_buka}.`, jadwal: j };
+    if (jam >= j.jam_tutup) return { buka: false, pesan: `Warung sudah tutup (tutup pukul ${j.jam_tutup}).`, jadwal: j };
+    return { buka: true, pesan: `Buka sampai pukul ${j.jam_tutup}.`, jadwal: j };
+  }
+
+  return { ambil, rentang, simpan, validasi, bukaSekarang };
 };

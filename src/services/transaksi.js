@@ -2,8 +2,14 @@
 // Satu transaksi database berisi: TRANSAKSI + DETAIL_TRANSAKSI tiap item
 // + STOK_KELUAR (alasan "terjual") tiap item + pengurangan stok_saat_ini.
 // Bila satu item saja stoknya tidak cukup, SELURUH transaksi dibatalkan.
+//
+// Dua sumber pesanan:
+//  - Kasir (admin): langsung lunas (dibayar di kasir).
+//  - Meja (pembeli scan QR): metode QRIS, status bayar "belum_bayar" sampai
+//    pembeli membayar (simulasi) lewat link /bayar/<kode_bayar>.
 const v = require('../lib/validasi');
 const { sekarang, hariIni, tanggalValid } = require('../lib/waktu');
+const { kodeAcak, kodeValid } = require('../lib/kode');
 
 const METODE = ['qris', 'tunai'];
 const STATUS_AKHIR = ['selesai', 'dibatalkan'];
@@ -14,10 +20,11 @@ function kodePesanan(waktu, nomor) {
   return `WU-${y.slice(2)}${m}${d}-${String(nomor).padStart(3, '0')}`;
 }
 
-module.exports = function layananTransaksi(db, barang, stok) {
+module.exports = function layananTransaksi(db, barang, stok, { meja, jadwal } = {}) {
   const insTrx = db.prepare(
-    `INSERT INTO TRANSAKSI (id_pengguna, waktu_transaksi, metode_bayar, total, nama_pelanggan, catatan, status, uang_diterima)
-     VALUES (?, ?, ?, ?, ?, ?, 'belum_selesai', ?)`
+    `INSERT INTO TRANSAKSI (id_pengguna, waktu_transaksi, metode_bayar, total, nama_pelanggan, catatan, status,
+                            uang_diterima, id_meja, status_bayar, kode_bayar)
+     VALUES (?, ?, ?, ?, ?, ?, 'belum_selesai', ?, ?, ?, ?)`
   );
   const insDetail = db.prepare(
     'INSERT INTO DETAIL_TRANSAKSI (id_transaksi, id_barang, jumlah, harga_satuan, subtotal) VALUES (?, ?, ?, ?, ?)'
@@ -39,18 +46,8 @@ module.exports = function layananTransaksi(db, barang, stok) {
     return [...peta.entries()].map(([id_barang, jumlah]) => ({ id_barang, jumlah }));
   }
 
-  function simpan(input, idPengguna) {
-    const metode = String(input.metode_bayar || '').toLowerCase();
-    if (!METODE.includes(metode)) {
-      throw new v.ValidasiError('Pilih metode bayar: QRIS atau tunai.', 'metode_bayar');
-    }
-    const items = rapikanItem(input.items);
-    const namaPelanggan = v.teksOpsional(input.nama_pelanggan, 60);
-    const catatan = v.teksOpsional(input.catatan, 200);
-    // Uang diterima hanya untuk tunai, opsional (untuk mencatat kembalian).
-    const adaUang = metode === 'tunai' && input.uang_diterima !== undefined && input.uang_diterima !== null && String(input.uang_diterima).trim() !== '';
-    const uang = adaUang ? v.bilanganBulatNonNegatif(input.uang_diterima, 'uang_diterima', 'Uang diterima') : null;
-
+  /** Simpan transaksi + detail + kurangi stok dalam SATU transaksi database. */
+  function buat({ metode, items, namaPelanggan, catatan, uang = null, idPengguna, idMeja = null, statusBayar = 'lunas', kodeBayar = null }) {
     const id = db.transaction(() => {
       const waktu = sekarang();
       // Harga diambil dari database (bukan dari HP), lalu disalin ke
@@ -74,7 +71,7 @@ module.exports = function layananTransaksi(db, barang, stok) {
         throw new v.ValidasiError(`Uang diterima kurang dari total pembayaran (Rp${total.toLocaleString('id-ID')}).`, 'uang_diterima');
       }
 
-      const idTrx = insTrx.run(idPengguna, waktu, metode, total, namaPelanggan, catatan, uang).lastInsertRowid;
+      const idTrx = insTrx.run(idPengguna, waktu, metode, total, namaPelanggan, catatan, uang, idMeja, statusBayar, kodeBayar).lastInsertRowid;
       for (const x of baris) {
         insDetail.run(idTrx, x.id_barang, x.jumlah, x.harga_satuan, x.subtotal);
         stok.kurangiDalamTransaksi(
@@ -85,8 +82,45 @@ module.exports = function layananTransaksi(db, barang, stok) {
       }
       return idTrx;
     })();
-
     return ambil(id);
+  }
+
+  /** Transaksi dari halaman Kasir (admin): dibayar langsung, jadi lunas. */
+  function simpan(input, idPengguna) {
+    const metode = String(input.metode_bayar || '').toLowerCase();
+    if (!METODE.includes(metode)) {
+      throw new v.ValidasiError('Pilih metode bayar: QRIS atau tunai.', 'metode_bayar');
+    }
+    const items = rapikanItem(input.items);
+    const namaPelanggan = v.teksOpsional(input.nama_pelanggan, 60);
+    const catatan = v.teksOpsional(input.catatan, 200);
+    // Uang diterima hanya untuk tunai, opsional (untuk mencatat kembalian).
+    const adaUang = metode === 'tunai' && input.uang_diterima !== undefined && input.uang_diterima !== null && String(input.uang_diterima).trim() !== '';
+    const uang = adaUang ? v.bilanganBulatNonNegatif(input.uang_diterima, 'uang_diterima', 'Uang diterima') : null;
+    return buat({ metode, items, namaPelanggan, catatan, uang, idPengguna });
+  }
+
+  /**
+   * Pesanan dari pembeli di meja (scan QR). Hanya saat warung buka menurut jadwal.
+   * Dibayar dengan QRIS (simulasi); tercatat atas nama admin (pemilik warung)
+   * karena pembeli tidak punya akun, dengan meja sebagai sumber pesanan.
+   */
+  function pesanDariMeja(kodeMeja, input) {
+    const m = meja.dariKode(kodeMeja);
+    const status = jadwal.bukaSekarang();
+    if (!status.buka) throw new v.ValidasiError(status.pesan, 'warung', 409);
+    const items = rapikanItem(input.items);
+    const namaPelanggan = v.teksWajib(input.nama_pelanggan, 'nama_pelanggan', 'Nama pemesan', 60);
+    const catatan = v.teksOpsional(input.catatan, 200);
+    const admin = db.prepare("SELECT id_pengguna FROM PENGGUNA WHERE peran = 'admin' ORDER BY id_pengguna LIMIT 1").get();
+    if (!admin) throw new v.ValidasiError('Warung belum siap menerima pesanan.', 'warung', 500);
+    let kodeBayar;
+    do kodeBayar = kodeAcak(16); while (db.prepare('SELECT 1 FROM TRANSAKSI WHERE kode_bayar = ?').get(kodeBayar));
+    const t = buat({
+      metode: 'qris', items, namaPelanggan, catatan,
+      idPengguna: admin.id_pengguna, idMeja: m.id_meja, statusBayar: 'belum_bayar', kodeBayar,
+    });
+    return untukPembeli(t);
   }
 
   function ambil(id) {
@@ -94,11 +128,14 @@ module.exports = function layananTransaksi(db, barang, stok) {
       .prepare(
         // nomor_harian: urutan transaksi pada tanggal yang sama (1, 2, 3, ...),
         // dipakai untuk kode pesanan WU-YYMMDD-NNN. Dihitung, tidak disimpan.
-        `SELECT t.*, p.nama AS pencatat,
+        `SELECT t.*, p.nama AS pencatat, m.nama_meja,
                 (SELECT COUNT(*) FROM TRANSAKSI x
                   WHERE substr(x.waktu_transaksi, 1, 10) = substr(t.waktu_transaksi, 1, 10)
                     AND x.id_transaksi <= t.id_transaksi) AS nomor_harian
-           FROM TRANSAKSI t JOIN PENGGUNA p USING (id_pengguna) WHERE id_transaksi = ?`
+           FROM TRANSAKSI t
+           JOIN PENGGUNA p USING (id_pengguna)
+           LEFT JOIN MEJA m ON m.id_meja = t.id_meja
+          WHERE id_transaksi = ?`
       )
       .get(Number(id));
     if (!t) return null;
@@ -111,6 +148,43 @@ module.exports = function layananTransaksi(db, barang, stok) {
     return t;
   }
 
+  /** Data pesanan yang boleh dilihat pembeli (tanpa data admin). */
+  function untukPembeli(t) {
+    return {
+      kode_pesanan: kodePesanan(t.waktu_transaksi, t.nomor_harian),
+      kode_bayar: t.kode_bayar,
+      waktu_transaksi: t.waktu_transaksi,
+      nama_meja: t.nama_meja,
+      nama_pelanggan: t.nama_pelanggan,
+      catatan: t.catatan,
+      total: t.total,
+      status: t.status,
+      status_bayar: t.status_bayar,
+      items: t.items.map((i) => ({ nama_barang: i.nama_barang, satuan: i.satuan, jumlah: i.jumlah, harga_satuan: i.harga_satuan, subtotal: i.subtotal })),
+    };
+  }
+
+  function dariKodeBayar(kode) {
+    const r = kodeValid(kode) ? db.prepare('SELECT id_transaksi FROM TRANSAKSI WHERE kode_bayar = ?').get(kode) : null;
+    if (!r) throw new v.ValidasiError('Pesanan tidak ditemukan.', 'kode_bayar', 404);
+    return ambil(r.id_transaksi);
+  }
+
+  /** Status pesanan untuk pembeli (dibuka lewat kode bayar yang hanya dimiliki pemesan). */
+  function pesananPembeli(kode) {
+    return untukPembeli(dariKodeBayar(kode));
+  }
+
+  /** Simulasi pembayaran QRIS: tandai lunas. Mengulang pada pesanan yang sudah lunas aman. */
+  function bayar(kode) {
+    const t = dariKodeBayar(kode);
+    if (t.status === 'dibatalkan') throw new v.ValidasiError('Pesanan ini sudah dibatalkan, tidak perlu dibayar.', 'status', 409);
+    if (t.status_bayar !== 'lunas') {
+      db.prepare("UPDATE TRANSAKSI SET status_bayar = 'lunas' WHERE id_transaksi = ? AND status = 'belum_selesai'").run(t.id_transaksi);
+    }
+    return untukPembeli(ambil(t.id_transaksi));
+  }
+
   /** Log penjualan satu tanggal + ringkasan QRIS/tunai (dipakai juga untuk EP-03). */
   function logHarian(tanggal = hariIni()) {
     if (!tanggalValid(tanggal)) throw new v.ValidasiError('Tanggal tidak valid.', 'tanggal');
@@ -121,15 +195,21 @@ module.exports = function layananTransaksi(db, barang, stok) {
       )
       .all(tanggal)
       .map((r) => ambil(r.id_transaksi));
-    // Pemasukan = semua transaksi yang tidak dibatalkan (pembayaran sudah diterima di kasir).
+    // Pemasukan = pesanan yang SUDAH DIBAYAR dan tidak dibatalkan.
     const ringkasan = {
       jumlah_transaksi: daftar.length, // semua, termasuk dibatalkan
       jumlah_dihitung: 0, belum_selesai: 0, selesai: 0, dibatalkan: 0,
+      belum_bayar: 0, total_belum_bayar: 0,
       total: 0, total_qris: 0, total_tunai: 0,
     };
     for (const t of daftar) {
       ringkasan[t.status] += 1;
       if (t.status === 'dibatalkan') continue;
+      if (t.status_bayar !== 'lunas') {
+        ringkasan.belum_bayar += 1;
+        ringkasan.total_belum_bayar += t.total;
+        continue;
+      }
       ringkasan.jumlah_dihitung += 1;
       ringkasan.total += t.total;
       ringkasan[t.metode_bayar === 'qris' ? 'total_qris' : 'total_tunai'] += t.total;
@@ -137,10 +217,22 @@ module.exports = function layananTransaksi(db, barang, stok) {
     return { tanggal, ringkasan, transaksi: daftar };
   }
 
+  /**
+   * Antrean pesanan: semua pesanan yang BELUM SELESAI (dari meja maupun kasir),
+   * apa pun tanggalnya, yang terlama di atas.
+   */
+  function antrean() {
+    return db
+      .prepare("SELECT id_transaksi FROM TRANSAKSI WHERE status = 'belum_selesai' ORDER BY waktu_transaksi, id_transaksi LIMIT 200")
+      .all()
+      .map((r) => ambil(r.id_transaksi));
+  }
+
   const qUbahStatus = db.prepare("UPDATE TRANSAKSI SET status = ? WHERE id_transaksi = ? AND status = 'belum_selesai'");
 
   /**
    * Ubah status pesanan: hanya dari belum_selesai ke selesai atau dibatalkan.
+   * Pesanan yang belum dibayar tidak bisa diselesaikan (hanya dibatalkan).
    * Pembatalan mengembalikan stok setiap item (dicatat di riwayat stok).
    */
   function ubahStatus(id, input, idPengguna) {
@@ -150,6 +242,9 @@ module.exports = function layananTransaksi(db, barang, stok) {
     if (!t) throw new v.ValidasiError('Transaksi tidak ditemukan.', 'id', 404);
     if (t.status !== 'belum_selesai') {
       throw new v.ValidasiError(`Transaksi ini sudah ${t.status === 'selesai' ? 'selesai' : 'dibatalkan'}, statusnya tidak bisa diubah lagi.`, 'status', 409);
+    }
+    if (status === 'selesai' && t.status_bayar !== 'lunas') {
+      throw new v.ValidasiError('Pesanan ini belum dibayar. Tunggu pembayaran QRIS dari pembeli, atau batalkan pesanan.', 'status', 409);
     }
     db.transaction(() => {
       if (qUbahStatus.run(status, t.id_transaksi).changes !== 1) {
@@ -166,21 +261,29 @@ module.exports = function layananTransaksi(db, barang, stok) {
   }
 
   /** Menu terlaris satu tanggal: hanya dari transaksi SELESAI, terbanyak di atas. */
-  function terlaris(tanggal = hariIni()) {
-    if (!tanggalValid(tanggal)) throw new v.ValidasiError('Tanggal tidak valid.', 'tanggal');
+  /**
+   * Menu terlaris untuk rentang tanggal [dari, sampai] (inklusif). Satu hari: dari = sampai.
+   * Hanya dari transaksi SELESAI, terbanyak di atas. Rentang maksimal 366 hari.
+   */
+  function terlaris({ dari = hariIni(), sampai = dari } = {}) {
+    if (!tanggalValid(dari)) throw new v.ValidasiError('Tanggal awal tidak valid.', 'dari');
+    if (!tanggalValid(sampai)) throw new v.ValidasiError('Tanggal akhir tidak valid.', 'sampai');
+    if (sampai < dari) throw new v.ValidasiError('Tanggal akhir harus sama atau setelah tanggal awal.', 'sampai');
+    const hari = (Date.parse(sampai) - Date.parse(dari)) / 86400000;
+    if (hari > 366) throw new v.ValidasiError('Rentang tanggal maksimal satu tahun.', 'sampai');
     const menu = db
       .prepare(
         `SELECT d.id_barang, b.nama_barang, b.satuan, SUM(d.jumlah) AS jumlah, SUM(d.subtotal) AS pemasukan
            FROM DETAIL_TRANSAKSI d
            JOIN TRANSAKSI t USING (id_transaksi)
            JOIN BARANG b ON b.id_barang = d.id_barang
-          WHERE t.status = 'selesai' AND substr(t.waktu_transaksi, 1, 10) = ?
+          WHERE t.status = 'selesai' AND substr(t.waktu_transaksi, 1, 10) BETWEEN ? AND ?
           GROUP BY d.id_barang
           ORDER BY jumlah DESC, b.nama_barang COLLATE NOCASE`
       )
-      .all(tanggal);
-    return { tanggal, menu };
+      .all(dari, sampai);
+    return { dari, sampai, tanggal: dari === sampai ? dari : undefined, menu };
   }
 
-  return { simpan, ambil, logHarian, ubahStatus, terlaris, METODE };
+  return { simpan, pesanDariMeja, pesananPembeli, bayar, ambil, logHarian, antrean, ubahStatus, terlaris, dariKodeBayar, METODE };
 };

@@ -79,6 +79,8 @@ const KENDALA = [
     'Sebelum disimpan: ketuk Bersihkan di bagian Pesanan Kasir. Setelah disimpan: buka Transaksi, ketuk Batalkan pada pesanan Belum Selesai, lalu konfirmasi. Stoknya kembali otomatis dan pesanan tidak dihitung sebagai pemasukan. Pesanan yang sudah Selesai tidak bisa dibatalkan.'],
   ['Bagaimana cara melihat rekap pemasukan?',
     'Buka Transaksi lalu ketuk Lihat Rekap. Pilih tanggal untuk melihat total pemasukan, rincian tunai dan QRIS, serta daftar transaksinya.'],
+  ['Bagaimana pembeli memesan dari meja?',
+    'Cetak QR tiap meja di Lainnya › Kelola meja & QR, lalu tempel di meja. Pembeli men-scan QR, memilih menu, dan membayar QRIS. Pesanan muncul di Transaksi dengan label meja dan status Belum Dibayar; setelah dibayar, siapkan pesanan lalu ketuk Selesai.'],
   ['Bagaimana jika data transaksi tidak muncul?',
     'Pastikan tanggal yang dipilih benar (waktu memakai WIB). Jika masih kosong, periksa koneksi Wi-Fi ke laptop yang menjalankan aplikasi, lalu muat ulang halaman.'],
 ];

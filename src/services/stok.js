@@ -97,11 +97,12 @@ module.exports = function layananStok(db, barang) {
            SELECT 'masuk' AS jenis, m.id_masuk AS id, m.id_barang, b.nama_barang, b.satuan, m.jumlah,
                   m.tanggal_masuk AS waktu,
                   CASE WHEN length(m.tanggal_masuk) = 10 THEN m.tanggal_masuk || ' 24' ELSE m.tanggal_masuk END AS urut,
-                  NULL AS alasan, m.catatan, p.nama AS pencatat, NULL AS id_transaksi
+                  NULL AS alasan, m.catatan, p.nama AS pencatat, NULL AS id_transaksi, NULL AS nama_meja
              FROM STOK_MASUK m JOIN BARANG b USING (id_barang) JOIN PENGGUNA p USING (id_pengguna)
            UNION ALL
            SELECT 'keluar', k.id_keluar, k.id_barang, b.nama_barang, b.satuan, k.jumlah,
-                  k.waktu_keluar, k.waktu_keluar, k.alasan, k.catatan, p.nama, k.id_transaksi
+                  k.waktu_keluar, k.waktu_keluar, k.alasan, k.catatan, p.nama, k.id_transaksi,
+                  (SELECT mj.nama_meja FROM TRANSAKSI t JOIN MEJA mj ON mj.id_meja = t.id_meja WHERE t.id_transaksi = k.id_transaksi)
              FROM STOK_KELUAR k JOIN BARANG b USING (id_barang) JOIN PENGGUNA p USING (id_pengguna)
          )
          WHERE (? IS NULL OR id_barang = ?)

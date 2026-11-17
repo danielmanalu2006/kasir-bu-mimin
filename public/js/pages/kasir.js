@@ -3,6 +3,41 @@
 // waktu menghitung dari halaman dibuka (atau transaksi sebelumnya) sampai tersimpan.
 import { api, esc, rupiah, angka, toast, ikonCari, ikonMenu, kodePesanan, kapital, sekarangWIB } from '../util.js';
 
+export const ikonAntrean = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10.3 20a1.9 1.9 0 0 0 3.4 0"/></svg>';
+
+/**
+ * Pasang badge "Pesanan Masuk": jumlah pesanan belum selesai, diperbarui tiap 10 detik.
+ * Mengembalikan { berhenti, segarkan(diam) }; diam = jangan tampilkan notifikasi pesanan baru.
+ */
+function pantauPesananMasuk(app) {
+  let sebelumnya = null;
+  async function muat(diam = false) {
+    try {
+      const daftar = await api('/transaksi/antrean');
+      const n = daftar.length;
+      const belumBayar = daftar.filter((t) => t.status_bayar === 'belum_bayar').length;
+      const badge = app.querySelector('#pm-badge');
+      const sub = app.querySelector('#pm-sub');
+      if (!badge) return;
+      badge.hidden = n === 0;
+      badge.textContent = n > 99 ? '99+' : String(n);
+      badge.setAttribute('aria-label', `${n} pesanan belum selesai`);
+      sub.textContent = n === 0
+        ? 'Tidak ada pesanan yang menunggu'
+        : `${n} pesanan belum selesai${belumBayar ? ` · ${belumBayar} menunggu bayar` : ''}`;
+      app.querySelector('#pesanan-masuk').classList.toggle('ada', n > 0);
+      if (!diam && sebelumnya !== null && n > sebelumnya) {
+        const baru = daftar[daftar.length - 1];
+        toast(`Pesanan baru masuk${baru?.nama_meja ? ` dari ${baru.nama_meja}` : ''}`, 'ok');
+      }
+      sebelumnya = n;
+    } catch { /* coba lagi di putaran berikutnya */ }
+  }
+  muat();
+  const id = setInterval(() => muat(), 10000);
+  return { berhenti: () => clearInterval(id), segarkan: (diam) => muat(diam) };
+}
+
 const KUNCI_WAKTU = 'warung.waktuTransaksi';
 const TARGET_DETIK = 30;
 
@@ -29,6 +64,12 @@ export async function render(app) {
       <h1>Kasir &amp; Pesanan</h1>
       <span class="timer num" id="timer" title="Waktu sejak pesanan dimulai (target < 30 detik)">0:00</span>
     </section>
+    <a class="bantuan-card pesanan-masuk" href="#/kasir/pesanan" id="pesanan-masuk">
+      <span class="pm-ikon">${ikonAntrean}</span>
+      <span class="grow"><b>Pesanan Masuk</b><span class="pm-sub" id="pm-sub">Memuat…</span></span>
+      <span class="badge-angka" id="pm-badge" hidden aria-live="polite"></span>
+      <span class="pm-panah" aria-hidden="true">›</span>
+    </a>
     <div class="bantuan-card bantuan-cari">
       <label class="bantuan-cari-input">
         ${ikonCari}
@@ -80,6 +121,7 @@ export async function render(app) {
     </div>`;
 
   const $ = (s) => app.querySelector(s);
+  const pesananMasuk = pantauPesananMasuk(app);
   const menuEl = $('#menu-list');
   const linesEl = $('#lines');
   const pesananEl = $('#pesanan');
@@ -277,7 +319,8 @@ export async function render(app) {
       const durasi = Math.round((performance.now() - mulai) / 100) / 10;
       const kode = kodePesanan(trx.waktu_transaksi, trx.nomor_harian);
       simpanWaktu({ id_transaksi: trx.id_transaksi, kode, detik: durasi, item: trx.items.length, metode, waktu: trx.waktu_transaksi });
-      toast(`Transaksi #${kode} tersimpan · ${rupiah(trx.total)} · ${metode.toUpperCase()} · ${durasi} detik. Tandai Selesai di Transaksi saat pesanan diantar.`, 'ok', 5000);
+      toast(`Transaksi #${kode} tersimpan · ${rupiah(trx.total)} · ${metode.toUpperCase()} · ${durasi} detik. Tandai Selesai di Pesanan Masuk saat pesanan diantar.`, 'ok', 5000);
+      pesananMasuk.segarkan(true);
       // Siap untuk pesanan berikutnya
       nomorBerikut = trx.nomor_harian + 1;
       barang = (await api('/barang')).sort((a, b) => a.id_barang - b.id_barang);
@@ -313,5 +356,6 @@ export async function render(app) {
   return () => {
     clearInterval(tick);
     pengamat.disconnect();
+    pesananMasuk.berhenti();
   };
 }

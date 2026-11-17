@@ -7,6 +7,7 @@ import * as jadwal from './pages/jadwal.js';
 import * as lainnya from './pages/lainnya.js';
 import * as bantuan from './pages/bantuan.js';
 import * as transaksi from './pages/transaksi.js';
+import * as antrean from './pages/antrean.js';
 import { tampilkanMasuk } from './pages/auth.js';
 import { tampilkanOnboarding } from './pages/onboarding.js';
 
@@ -15,7 +16,7 @@ let bersihkan = null;
 
 const rute = {
   beranda: () => beranda.render(app),
-  kasir: (sub, q) => kasir.render(app, q),
+  kasir: (sub, q) => (sub === 'pesanan' ? antrean.render(app) : kasir.render(app, q)),
   stok: (sub, q) => stok.render(app, sub || 'daftar', q),
   jadwal: (sub, q) => jadwal.render(app, q),
   transaksi: (sub, q) => transaksi.render(app, sub, q),
@@ -63,6 +64,10 @@ async function mulaiMasuk() {
 function keluar() {
   sesi.keluar();
   app.replaceChildren();
+  document.querySelectorAll('.sheet-backdrop').forEach((s) => s.remove());
+  // Setelah masuk lagi, mulai dari Beranda (tanpa memicu navigasi sekarang).
+  history.replaceState(null, '', '#/beranda');
+  perbaruiHeader();
   mulaiMasuk();
 }
 
